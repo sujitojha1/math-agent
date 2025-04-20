@@ -6,6 +6,12 @@ import asyncio
 from google import genai
 from concurrent.futures import TimeoutError
 from functools import partial
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
+from rich import box
+
+console = Console()
 
 # Load environment variables from .env file
 load_dotenv()
@@ -21,7 +27,7 @@ iteration_response = []
 
 async def generate_with_timeout(client, prompt, timeout=10):
     """Generate content with a timeout"""
-    print("Starting LLM generation...")
+    # print("Starting LLM generation...")
     try:
         # Convert the synchronous generate_content call to run in a thread
         loop = asyncio.get_event_loop()
@@ -35,13 +41,13 @@ async def generate_with_timeout(client, prompt, timeout=10):
             ),
             timeout=timeout
         )
-        print("LLM generation completed")
+        # print("LLM generation completed")
         return response
     except TimeoutError:
-        print("LLM generation timed out!")
+        console.print("[red]LLM generation timed out![/red]")
         raise
     except Exception as e:
-        print(f"Error in LLM generation: {e}")
+        console.print(f"[red]Error in LLM generation: {e}[/red]")
         raise
 
 def reset_state():
@@ -52,31 +58,31 @@ def reset_state():
     iteration_response = []
 
 async def main():
-    reset_state()  # Reset at the start of main
-    print("Starting main execution...")
+    
+    
     try:
         # Create a single MCP server connection
-        print("Establishing connection to MCP server...")
+        console.print(Panel("Chain of Thought Calculator", border_style="cyan"))
         server_params = StdioServerParameters(
             command="python",
             args=["example2.py"]
         )
 
         async with stdio_client(server_params) as (read, write):
-            print("Connection established, creating session...")
+            # print("Connection established, creating session...")
             async with ClientSession(read, write) as session:
-                print("Session created, initializing...")
+                # print("Session created, initializing...")
                 await session.initialize()
                 
                 # Get available tools
-                print("Requesting tool list...")
+                # print("Requesting tool list...")
                 tools_result = await session.list_tools()
                 tools = tools_result.tools
-                print(f"Successfully retrieved {len(tools)} tools")
+                # print(f"Successfully retrieved {len(tools)} tools")
 
                 # Create system prompt with available tools
-                print("Creating system prompt...")
-                print(f"Number of tools: {len(tools)}")
+                # print("Creating system prompt...")
+                # print(f"Number of tools: {len(tools)}")
                 
                 try:
                     # First, let's inspect what a tool object looks like
@@ -110,200 +116,177 @@ async def main():
                             tools_description.append(f"{i+1}. Error processing tool")
                     
                     tools_description = "\n".join(tools_description)
-                    print("Successfully created tools description")
+                    # print("Successfully created tools description")
                 except Exception as e:
                     print(f"Error creating tools description: {e}")
                     tools_description = "Error loading tools"
                 
-                print("Created system prompt...")
+                # print("Created system prompt...")
                 
-                system_prompt = f"""You are a math agent solving problems in iterations. You have access to various mathematical tools.
+                system_prompt = f"""You are a mathematical reasoning agent that solves problems step by step.
+                    You have access to these tools:
+                    {tools_description}
 
-Available tools:
-{tools_description}
+                    First show your reasoning, then calculate and verify each step.
 
-You must respond with EXACTLY ONE line in one of these formats (no additional text):
-1. For function calls:
-   FUNCTION_CALL: function_name|param1|param2|...
+                    Respond with EXACTLY ONE line in one of these formats:
+                    1. FUNCTION_CALL: function_name|param1|param2|...
+                    2. FINAL_ANSWER: [answer]
 
-2. For painting the result before returning, you must make two function calls to open paint and draw rectangle in order:
-    FUNCTION_CALL: function_name|param1|param2|...
+                    Important:
+                    - When a function returns multiple values, you need to process all of them
+                    - Only give FINAL_ANSWER after you've completed all calculations, called the paint function with the result and send the results to self email
+                    - Do not repeat function calls with the same parameters
+                    - Always verify your calculations before proceeding to the next step
+                    - If a calculation fails verification, try to identify and fix the error
+                    - Show clear reasoning for each mathematical operation
 
-3. For sending the result as email before returning, you must make a call to send the email with subject and message as results:
-    FUNCTION_CALL: function_name|param1|param2|...
-       
-4. For final answers:
-   FINAL_ANSWER: [number]
+                    Example:
+                    User: Solve (2 + 3) * 4
+                    Assistant: FUNCTION_CALL: show_reasoning|["1. First, solve inside parentheses: 2 + 3", "2. Then multiply the result by 4"]
+                    User: Next step?
+                    Assistant: FUNCTION_CALL: calculate|2 + 3
+                    User: Result is 5. Let's verify this step.
+                    Assistant: FUNCTION_CALL: verify|2 + 3|5
+                    User: Verified. Next step?
+                    Assistant: FUNCTION_CALL: calculate|5 * 4
+                    User: Result is 20. Let's verify the final answer.
+                    Assistant: FUNCTION_CALL: verify|(2 + 3) * 4|20
+                    User: Verified correct.
+                    Assistant: FINAL_ANSWER: [20]
 
-Important:
-- When a function returns multiple values, you need to process all of them
-- Only give FINAL_ANSWER after you've completed all calculations, called the paint function with the result and send the results to self email
-- Do not repeat function calls with the same parameters
+                    DO NOT include any explanations or additional text.
+                    Your entire response should be a single line starting with either FUNCTION_CALL: or FINAL_ANSWER"""
 
-Examples:
-- FUNCTION_CALL: add|5|3
-- FUNCTION_CALL: strings_to_chars_to_int|INDIA
-- FUNCTION_CALL: paint|42
-- FINAL_ANSWER: [42]
+                problem = """Find the ASCII values of characters in INDIA, then return sum of exponentials of those values, send the result over email, and open the paint and draw the result. """
+                console.print(Panel(f"[bold cyan]Problem:[/bold cyan] {problem}", border_style="cyan"))
 
-DO NOT include any explanations or additional text.
-Your entire response should be a single line starting with either FUNCTION_CALL: or FINAL_ANSWER"""
-
-                query = """Find the ASCII values of characters in INDIA, then return sum of exponentials of those values, send the result over email, and open the paint and draw the result. """
-                print("Starting iteration loop...")
+                # Initialize conversation
+                prompt = f"{system_prompt}\n\nSolve this problem step by step: {problem}"
+                conversation_history = []
                 
-                # Use global iteration variables
-                global iteration, last_response
-                
-                while iteration < max_iterations:
-                    print(f"\n--- Iteration {iteration + 1} ---")
-                    if last_response is None:
-                        current_query = query
-                    else:
-                        current_query = current_query + "\n\n" + " ".join(iteration_response)
-                        current_query = current_query + "  What should I do next?"
-
-                    # Get model's response with timeout
-                    print("Preparing to generate LLM response...")
-                    prompt = f"{system_prompt}\n\nQuery: {current_query}"
-                    try:
-                        response = await generate_with_timeout(client, prompt)
-                        response_text = response.text.strip()
-                        print(f"LLM Response: {response_text}")
-                        
-                        # Find the FUNCTION_CALL line in the response
-                        for line in response_text.split('\n'):
-                            line = line.strip()
-                            if line.startswith("FUNCTION_CALL:"):
-                                response_text = line
-                                break
-                        
-                    except Exception as e:
-                        print(f"Failed to get LLM response: {e}")
+                while True:
+                    response = await generate_with_timeout(client, prompt)
+                    if not response or not response.text:
                         break
 
+                    result = response.text.strip()
+                    console.print(Panel(f"[bold yellow]Assistant:[/bold yellow] {result}", border_style="yellow"))
 
-                    if response_text.startswith("FUNCTION_CALL:"):
-                        _, function_info = response_text.split(":", 1)
+                    if result.startswith("FUNCTION_CALL:"):
+                        _, function_info = result.split(":", 1)
                         parts = [p.strip() for p in function_info.split("|")]
                         func_name, params = parts[0], parts[1:]
                         
-                        print(f"\nDEBUG: Raw function info: {function_info}")
-                        print(f"DEBUG: Split parts: {parts}")
-                        print(f"DEBUG: Function name: {func_name}")
-                        print(f"DEBUG: Raw parameters: {params}")
+                        if func_name == "show_reasoning":
+                            steps = eval(parts[1])
+                            await session.call_tool("show_reasoning", arguments={"steps": steps})
+                            prompt += f"\nUser: Next step?"
+                            
+                        elif func_name == "verify":
+                            expression, expected = parts[1], float(parts[2])
+                            await session.call_tool("verify", arguments={
+                                "expression": expression,
+                                "expected": expected
+                            })
+                            prompt += f"\nUser: Verified. Next step?"
+                        else:
+                            console.print(f"\n[dim]DEBUG: Raw function info: {function_info}[/dim]")
+                            console.print(f"[dim]DEBUG: Split parts: {parts}[/dim]")
+                            console.print(f"[dim]DEBUG: Function name: {func_name}[/dim]")
+                            console.print(f"[dim]DEBUG: Raw parameters: {params}[/dim]")
                         
-                        try:
-                            # Find the matching tool to get its input schema
-                            tool = next((t for t in tools if t.name == func_name), None)
-                            if not tool:
-                                print(f"DEBUG: Available tools: {[t.name for t in tools]}")
-                                raise ValueError(f"Unknown tool: {func_name}")
+                            try:
+                                # Find the matching tool to get its input schema
+                                tool = next((t for t in tools if t.name == func_name), None)
+                                if not tool:
+                                    print(f"DEBUG: Available tools: {[t.name for t in tools]}")
+                                    raise ValueError(f"Unknown tool: {func_name}")
 
-                            print(f"DEBUG: Found tool: {tool.name}")
-                            print(f"DEBUG: Tool schema: {tool.inputSchema}")
+                                print(f"DEBUG: Found tool: {tool.name}")
+                                print(f"DEBUG: Tool schema: {tool.inputSchema}")
 
-                            # Prepare arguments according to the tool's input schema
-                            arguments = {}
-                            schema_properties = tool.inputSchema.get('properties', {})
-                            print(f"DEBUG: Schema properties: {schema_properties}")
+                                # Prepare arguments according to the tool's input schema
+                                arguments = {}
+                                schema_properties = tool.inputSchema.get('properties', {})
+                                print(f"DEBUG: Schema properties: {schema_properties}")
 
-                            for param_name, param_info in schema_properties.items():
-                                if not params:  # Check if we have enough parameters
-                                    raise ValueError(f"Not enough parameters provided for {func_name}")
+                                for param_name, param_info in schema_properties.items():
+                                    if not params:  # Check if we have enough parameters
+                                        raise ValueError(f"Not enough parameters provided for {func_name}")
+                                        
+                                    value = params.pop(0)  # Get and remove the first parameter
+                                    param_type = param_info.get('type', 'string')
                                     
-                                value = params.pop(0)  # Get and remove the first parameter
-                                param_type = param_info.get('type', 'string')
+                                    print(f"DEBUG: Converting parameter {param_name} with value {value} to type {param_type}")
+                                    
+                                    # Convert the value to the correct type based on the schema
+                                    if param_type == 'integer':
+                                        arguments[param_name] = int(value)
+                                    elif param_type == 'number':
+                                        arguments[param_name] = float(value)
+                                    elif param_type == 'array':
+                                        # Handle array input
+                                        if isinstance(value, str):
+                                            value = value.strip('[]').split(',')
+                                        arguments[param_name] = [int(x.strip()) for x in value]
+                                    else:
+                                        arguments[param_name] = str(value)
+
+                                print(f"DEBUG: Final arguments: {arguments}")
+                                print(f"DEBUG: Calling tool {func_name}")
                                 
-                                print(f"DEBUG: Converting parameter {param_name} with value {value} to type {param_type}")
+                                result = await session.call_tool(func_name, arguments=arguments)
+                                print(f"DEBUG: Raw result: {result}")
                                 
-                                # Convert the value to the correct type based on the schema
-                                if param_type == 'integer':
-                                    arguments[param_name] = int(value)
-                                elif param_type == 'number':
-                                    arguments[param_name] = float(value)
-                                elif param_type == 'array':
-                                    # Handle array input
-                                    if isinstance(value, str):
-                                        value = value.strip('[]').split(',')
-                                    arguments[param_name] = [int(x.strip()) for x in value]
+                                # Get the full result content
+                                if hasattr(result, 'content'):
+                                    print(f"DEBUG: Result has content attribute")
+                                    # Handle multiple content items
+                                    if isinstance(result.content, list):
+                                        iteration_result = [
+                                            item.text if hasattr(item, 'text') else str(item)
+                                            for item in result.content
+                                        ]
+                                    else:
+                                        iteration_result = str(result.content)
                                 else:
-                                    arguments[param_name] = str(value)
-
-                            print(f"DEBUG: Final arguments: {arguments}")
-                            print(f"DEBUG: Calling tool {func_name}")
-                            
-                            result = await session.call_tool(func_name, arguments=arguments)
-                            print(f"DEBUG: Raw result: {result}")
-                            
-                            # Get the full result content
-                            if hasattr(result, 'content'):
-                                print(f"DEBUG: Result has content attribute")
-                                # Handle multiple content items
-                                if isinstance(result.content, list):
-                                    iteration_result = [
-                                        item.text if hasattr(item, 'text') else str(item)
-                                        for item in result.content
-                                    ]
-                                else:
-                                    iteration_result = str(result.content)
-                            else:
-                                print(f"DEBUG: Result has no content attribute")
-                                iteration_result = str(result)
+                                    print(f"DEBUG: Result has no content attribute")
+                                    iteration_result = str(result)
+                                    
+                                print(f"DEBUG: Final iteration result: {iteration_result}")
                                 
-                            print(f"DEBUG: Final iteration result: {iteration_result}")
+                                # Format the response based on result type
+                                if isinstance(iteration_result, list):
+                                    result_str = f"[{', '.join(iteration_result)}]"
+                                else:
+                                    result_str = str(iteration_result)
+                                
+                                iteration_response.append(
+                                    f"In the {iteration + 1} iteration you called {func_name} with {arguments} parameters, "
+                                    f"and the function returned {result_str}."
+                                )
+                                last_response = iteration_result
+
+                            except Exception as e:
+                                print(f"DEBUG: Error details: {str(e)}")
+                                print(f"DEBUG: Error type: {type(e)}")
+                                import traceback
+                                traceback.print_exc()
+                                iteration_response.append(f"Error in iteration {iteration + 1}: {str(e)}")
+                                break
                             
-                            # Format the response based on result type
-                            if isinstance(iteration_result, list):
-                                result_str = f"[{', '.join(iteration_result)}]"
-                            else:
-                                result_str = str(iteration_result)
-                            
-                            iteration_response.append(
-                                f"In the {iteration + 1} iteration you called {func_name} with {arguments} parameters, "
-                                f"and the function returned {result_str}."
-                            )
-                            last_response = iteration_result
-
-                        except Exception as e:
-                            print(f"DEBUG: Error details: {str(e)}")
-                            print(f"DEBUG: Error type: {type(e)}")
-                            import traceback
-                            traceback.print_exc()
-                            iteration_response.append(f"Error in iteration {iteration + 1}: {str(e)}")
-                            break
-
-                    elif response_text.startswith("FINAL_ANSWER:"):
-                        print("\n=== Agent Execution Complete ===")
-                        # result = await session.call_tool("open_paint")
-                        # print(result.content[0].text)
-
-                        # # Wait longer for Paint to be fully maximized
-                        # await asyncio.sleep(1)
-
-                        # # Draw a rectangle
-                        # result = await session.call_tool(
-                        #     "draw_rectangle",
-                        #     arguments={
-                        #         "x1": 780,
-                        #         "y1": 380,
-                        #         "x2": 1140,
-                        #         "y2": 700
-                        #     }
-                        # )
-                        # print(result.content[0].text)
-
-                        # # Draw rectangle and add text
-                        # result = await session.call_tool(
-                        #     "add_text_in_paint",
-                        #     arguments={
-                        #         "text": response_text
-                        #     }
-                        # )
-                        # print(result.content[0].text)
+                    elif result.startswith("FINAL_ANSWER:"):
+                        # Verify the final answer against the original problem
+                        if conversation_history:
+                            final_answer = float(result.split("[")[1].split("]")[0])
+                            await session.call_tool("verify", arguments={
+                                "expression": problem,
+                                "expected": final_answer
+                            })
                         break
-
-                    iteration += 1
+                    
+                    prompt += f"\nAssistant: {result}"
 
     except Exception as e:
         print(f"Error in main execution: {e}")
