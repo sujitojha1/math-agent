@@ -182,7 +182,7 @@ async def main():
                             steps = eval(parts[1])
                             await session.call_tool("show_reasoning", arguments={"steps": steps})
                             prompt += f"\nUser: Next step?"
-                            
+                                
                         elif func_name == "verify":
                             expression, expected = parts[1], float(parts[2])
                             await session.call_tool("verify", arguments={
@@ -191,90 +191,53 @@ async def main():
                             })
                             prompt += f"\nUser: Verified. Next step?"
                         else:
-                            console.print(f"\n[dim]DEBUG: Raw function info: {function_info}[/dim]")
-                            console.print(f"[dim]DEBUG: Split parts: {parts}[/dim]")
-                            console.print(f"[dim]DEBUG: Function name: {func_name}[/dim]")
-                            console.print(f"[dim]DEBUG: Raw parameters: {params}[/dim]")
-                        
-                            try:
-                                # Find the matching tool to get its input schema
-                                tool = next((t for t in tools if t.name == func_name), None)
-                                if not tool:
-                                    print(f"DEBUG: Available tools: {[t.name for t in tools]}")
-                                    raise ValueError(f"Unknown tool: {func_name}")
+                            print(f"\nDEBUG: Raw function info: {function_info}")
+                            print(f"DEBUG: Split parts: {parts}")
+                            print(f"DEBUG: Function name: {func_name}")
+                            print(f"DEBUG: Raw parameters: {params}")
+                            
+                            
+                            # Find the matching tool to get its input schema
+                            tool = next((t for t in tools if t.name == func_name), None)
+                            if not tool:
+                                print(f"DEBUG: Available tools: {[t.name for t in tools]}")
+                                raise ValueError(f"Unknown tool: {func_name}")
 
-                                print(f"DEBUG: Found tool: {tool.name}")
-                                print(f"DEBUG: Tool schema: {tool.inputSchema}")
+                            print(f"DEBUG: Found tool: {tool.name}")
+                            print(f"DEBUG: Tool schema: {tool.inputSchema}")
 
-                                # Prepare arguments according to the tool's input schema
-                                arguments = {}
-                                schema_properties = tool.inputSchema.get('properties', {})
-                                print(f"DEBUG: Schema properties: {schema_properties}")
+                            # Prepare arguments according to the tool's input schema
+                            arguments = {}
+                            schema_properties = tool.inputSchema.get('properties', {})
+                            print(f"DEBUG: Schema properties: {schema_properties}")
 
-                                for param_name, param_info in schema_properties.items():
-                                    if not params:  # Check if we have enough parameters
-                                        raise ValueError(f"Not enough parameters provided for {func_name}")
-                                        
-                                    value = params.pop(0)  # Get and remove the first parameter
-                                    param_type = param_info.get('type', 'string')
+                            for param_name, param_info in schema_properties.items():
+                                if not params:  # Check if we have enough parameters
+                                    raise ValueError(f"Not enough parameters provided for {func_name}")
                                     
-                                    print(f"DEBUG: Converting parameter {param_name} with value {value} to type {param_type}")
-                                    
-                                    # Convert the value to the correct type based on the schema
-                                    if param_type == 'integer':
-                                        arguments[param_name] = int(value)
-                                    elif param_type == 'number':
-                                        arguments[param_name] = float(value)
-                                    elif param_type == 'array':
-                                        # Handle array input
-                                        if isinstance(value, str):
-                                            value = value.strip('[]').split(',')
-                                        arguments[param_name] = [int(x.strip()) for x in value]
-                                    else:
-                                        arguments[param_name] = str(value)
-
-                                print(f"DEBUG: Final arguments: {arguments}")
-                                print(f"DEBUG: Calling tool {func_name}")
+                                value = params.pop(0)  # Get and remove the first parameter
+                                param_type = param_info.get('type', 'string')
                                 
-                                result = await session.call_tool(func_name, arguments=arguments)
-                                print(f"DEBUG: Raw result: {result}")
+                                print(f"DEBUG: Converting parameter {param_name} with value {value} to type {param_type}")
                                 
-                                # Get the full result content
-                                if hasattr(result, 'content'):
-                                    print(f"DEBUG: Result has content attribute")
-                                    # Handle multiple content items
-                                    if isinstance(result.content, list):
-                                        iteration_result = [
-                                            item.text if hasattr(item, 'text') else str(item)
-                                            for item in result.content
-                                        ]
-                                    else:
-                                        iteration_result = str(result.content)
+                                # Convert the value to the correct type based on the schema
+                                if param_type == 'integer':
+                                    arguments[param_name] = int(value)
+                                elif param_type == 'number':
+                                    arguments[param_name] = float(value)
+                                elif param_type == 'array':
+                                    # Handle array input
+                                    if isinstance(value, str):
+                                        value = value.strip('[]').split(',')
+                                    arguments[param_name] = [int(x.strip()) for x in value]
                                 else:
-                                    print(f"DEBUG: Result has no content attribute")
-                                    iteration_result = str(result)
-                                    
-                                print(f"DEBUG: Final iteration result: {iteration_result}")
-                                
-                                # Format the response based on result type
-                                if isinstance(iteration_result, list):
-                                    result_str = f"[{', '.join(iteration_result)}]"
-                                else:
-                                    result_str = str(iteration_result)
-                                
-                                iteration_response.append(
-                                    f"In the {iteration + 1} iteration you called {func_name} with {arguments} parameters, "
-                                    f"and the function returned {result_str}."
-                                )
-                                last_response = iteration_result
+                                    arguments[param_name] = str(value)
 
-                            except Exception as e:
-                                print(f"DEBUG: Error details: {str(e)}")
-                                print(f"DEBUG: Error type: {type(e)}")
-                                import traceback
-                                traceback.print_exc()
-                                iteration_response.append(f"Error in iteration {iteration + 1}: {str(e)}")
-                                break
+                            print(f"DEBUG: Final arguments: {arguments}")
+                            print(f"DEBUG: Calling tool {func_name}")
+                            
+                            result = await session.call_tool(func_name, arguments=arguments)
+                            prompt += f"\nUser: Function completed. Next step?"
                             
                     elif result.startswith("FINAL_ANSWER:"):
                         # Verify the final answer against the original problem
